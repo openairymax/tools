@@ -32,15 +32,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"; [ "${KEEP:-0}" = 1 ] || cleanup' EXIT
 
 cleanup() {
-    # best-effort：按 tag 查 release id → 删除 release（连带附件）→ 删 tag
-    local rid
-    rid="$(curl -fsS -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
-        "${API}/releases/tags/${TAG}" 2>/dev/null | python3 -c 'import json,sys;print((json.load(sys.stdin) or {}).get("id") or "")' 2>/dev/null || true)"
-    if [ -n "$rid" ]; then
-        curl -s -o /dev/null -w "delete release(${rid}): HTTP %{http_code}\n" \
-            -X DELETE -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
-            "${API}/releases/${rid}" || true
-    fi
+    # tag 删除是唯一 API 可做的清理（防 GitHub echo run）；release 行 inert
     curl -s -o /dev/null -w "delete tag: HTTP %{http_code}\n" \
         -X DELETE -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
         "${API}/tags/${TAG}" || true
@@ -48,10 +40,11 @@ cleanup() {
 
 echo "== 上传速度探针 == repo=${ATOMGIT_REPO} tag=${TAG} 组大小=${PER_GROUP_MB}MB×${FILES_N}/组 并发档=[${PAR_LIST}]"
 
-# 1) 建探针 release（服务端自动补 tag，与发布同路径）
+# 1) 建探针 release（服务端自动补 tag + 源归档，与发布同路径）。
+# body 必须非空（atomgit 实证：body 为空 → HTTP 400 "body不能为空"）。
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
     -H 'Content-Type: application/json' \
-    -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG} (upload probe)\",\"prerelease\":true}" \
+    -d "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG} (upload probe)\",\"body\":\"upload speed probe (0.1.13 I-upload); cleans up tag on exit\",\"prerelease\":true}" \
     "${API}/releases")
 echo "create release: HTTP ${code}"
 [ "$code" = "201" ] || [ "$code" = "200" ] || { echo "release 创建失败"; exit 1; }
