@@ -448,7 +448,11 @@ fi
 # 并行上传（0.1.6f 强化）：6 架构 × 3 附件 + manifest/installer 约 24 文件，
 # 串行 PUT 大包（35-45MB）耗时显著；限 3 并发（避免打爆 atomgit API 限流），
 # 任一失败记入失败清单，全部结束后 fail-closed 中止。
-UPLOAD_PAR=3
+# I-upload（0.1.13）：并发数参数化（UPLOAD_PAR 环境可调）。2026-09-06 正式
+# run 34031064018 实证：3 并发下总吞吐 ~80KB/s（178MB/37min，单流 23-64KB/s），
+# 疑似单连接级限流 → 提高并发或可线性增益；边界由 upload-speed-probe.sh 在
+# runner 侧 A/B 实测（PAR=3/6/8）定界后再调默认值。
+UPLOAD_PAR="${UPLOAD_PAR:-3}"
 UP_FAIL_LOG="$TMP/upfailed.txt"
 rm -f "$UP_FAIL_LOG"
 for f in "${ARTIFACTS[@]}" "${ARTIFACTS[@]/%/.sha256}" "${ARTIFACTS[@]/%/.sig}" "$MANIFEST" "$MANIFEST.asc" "$INSTALLER" "$INSTALLER_PS1"; do
