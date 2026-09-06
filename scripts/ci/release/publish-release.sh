@@ -491,6 +491,22 @@ if [ "${SKIP_LATEST:-0}" != "1" ]; then
             log_warn "latest/ 无变更或提交失败"
         git -C "$LATEST_DIR" push origin HEAD:main >/dev/null 2>&1 || \
             log_warn "latest/ push 失败（可手动同步）"
+        # P23 根修：manifest commit 双端同步。历史缺陷（6186a5cd1 实证）：
+        # 本阶段只 clone/push atomgit，GitHub main 永远收不到 manifest 更新
+        # commit，双端分叉只能手动 merge（cef8f277 补丁）。两仓为同一提交图
+        # 的镜像，此处向 GitHub main 补推同一 commit（fail-soft：失败仅告警，
+        # 不阻断 atomgit 发布主链路）。
+        if [ -n "${GITHUB_REPO:-}" ] && [ -n "${GITHUB_PAT:-}" ]; then
+            if git -C "$LATEST_DIR" push \
+                "https://x-access-token:${GITHUB_PAT}@github.com/${GITHUB_REPO}.git" \
+                HEAD:main >/dev/null 2>&1; then
+                log_ok "latest/ manifest 已同步 GitHub main"
+            else
+                log_warn "latest/ manifest 同步 GitHub 失败（双端分叉时 non-fast-forward，需手动 merge）"
+            fi
+        else
+            log_warn "GITHUB_REPO/GITHUB_PAT 未设置，跳过 GitHub manifest 同步"
+        fi
         log_ok "latest/manifest.${CHANNEL}.json 已更新"
     fi
 fi
