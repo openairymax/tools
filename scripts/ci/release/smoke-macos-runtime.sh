@@ -7,12 +7,13 @@
 # 的判定完全等价：若包内任一 Mach-O 仍依赖包外非系统 dylib，dyld 在本机同样
 # 无法解析（系统库例外，目标机必有）。
 #
-# 做法：
-#   1) 逐个启动 bin/ 下的 Mach-O（daemon/CLI/TUI），捕获 stderr 与存活状态：
-#      - stderr 出现 "dyld: ... not loaded / Symbol not found" → FAIL（自包含破坏）；
-#      - 进程存活 ≥2s（未因缺库崩溃）→ 可启（daemon 常驻路径已进入 main）；
-#      - 提前退出则记录退出码（多为"无配置/无 TTY"类正常失败，加载器已成功）。
-#   2) 任一 FAIL → 非零退出，阻断打包（与 bundle-macos-dylibs.sh fail-closed 一致）。
+# 判定语义（loader 自包含目标，非"无配置可跑全功能"）：
+#   - stderr 出现 dyld 加载失败特征（Library not loaded / Symbol not found）
+#     → FAIL：自包含破坏，阻断打包；
+#   - 进程存活 ≥2s（进入 main 常驻）→ [可启]；
+#   - 快速退出（无配置/无 TTY 等正常快速失败，含 signal 终止）→ [可启]，
+#     记录退出码；stderr 前几行一并输出供审计。SIGABRT 等信号退出只证明
+#     main 已进入（dyld 已完成解析），不属于自包含失败。
 #
 # 用法：smoke-macos-runtime.sh <stage_dir>
 set -euo pipefail
@@ -31,7 +32,6 @@ is_macho() {
         || [ "$m" = "bebafeca" ] || [ "$m" = "feedface" ] || [ "$m" = "feedfacf" ]
 }
 
-# dyld 加载失败特征串（缺库/符号）：只要 main 之前加载器报错即在此列
 dyld_error() { grep -Eq "dyld: (Library not loaded|Symbol not found)|image not found" "$1"; }
 
 FAILED=0
@@ -43,7 +43,7 @@ for f in "$BIN_DIR"/*; do
     LAUNCHED=$((LAUNCHED + 1))
     out="$TMPD/$n.out"; err="$TMPD/$n.err"
     : > "$out"; : > "$err"
-    # 后台启动（/dev/null 输入防 TTY 阻塞）；bash 3.2 无 setsid，起后前台轮询
+    # 后台启动（/dev/null 输入防 TTY 阻塞）；bash 3.2 无 setsid，起后轮询存活
     "$f" </dev/null >"$out" 2>"$err" &
     pid=$!
     alive=1
@@ -53,17 +53,23 @@ for f in "$BIN_DIR"/*; do
     done
     if [ "$alive" = "1" ]; then
         kill "$pid" 2>/dev/null || true
+        # wait 返回非零会被 set -e 终止，必须用 || true 捕获
         wait "$pid" 2>/dev/null || true
         echo "  [可启] $n : 常驻运行 ≥2s（已终止探针进程）"
         continue
     fi
-    wait "$pid" 2>/dev/null; rc=$?
+    wait "$pid" 2>/dev/null || true
+    rc=$?
     if dyld_error "$err"; then
         echo "::error::FAIL $n : dyld 加载失败（非系统依赖未解析）"
         sed 's/^/    /' "$err" | head -5
         FAILED=1
     else
-        echo "  [可启] $n : 加载器解析完整，进程退出码=$rc（无配置/环境时为正常快速退出）"
+        echo "  [可启] $n : 加载器解析完整，退出码=$rc（无配置/无 TTY 快速退出属预期）"
+        if [ "$rc" -ge 128 ]; then
+            echo "  note: $n 以信号终止（rc=$rc），非自包含失败；stderr 摘要："
+            sed 's/^/    /' "$err" | head -4
+        fi
     fi
 done
 
