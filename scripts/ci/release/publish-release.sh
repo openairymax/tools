@@ -105,15 +105,52 @@ done
 # 包内关键组件预检（0.1.6h 漏件教训：启动器 bin/airymaxrt 由安装器
 # 生成、包内不含，旧检查 grep 'bin/airymaxrt' 永远不命中形同虚设）。
 # 改为 fail-closed：关键二进制缺任一即中止；包内脚本做语法预检。
-REQUIRED_BIN="airy_cli agentrt-bootstrap.sh gateway_d llm_d think_d sched_d tool_d mem_d agent_d"
+# 0.1.13 补全（2026-09-06）：此前 REQUIRED_BIN 只列 8 项，漏 7 个 daemon
+# （market_d/monit_d/notify_d/channel_d/a2a_d/cupolas_d/maths_d/hook_d）——
+# 漏件门禁形同虚设，正是"总是缺东西"的一手原因。现列全 15 daemon 服务 +
+# airy_cli + bootstrap；并对全部发布包断言"完整能力"（TUI/config/Python
+# 运行时），任一缺失即中止，杜绝半成品出库。
+REQUIRED_BIN="airy_cli agentrt-bootstrap.sh gateway_d llm_d think_d sched_d tool_d mem_d agent_d market_d monit_d notify_d channel_d a2a_d cupolas_d maths_d hook_d"
+# 完整能力清单（tar.gz 与 zip 通用；Windows 侧二进制带 .exe 后缀，匹配
+# 逻辑对 "bin/$b" 与 "bin/$b.exe" 双态容忍）。config/* 由 lf-package 统一
+# 注入，lib/{airymax_agents,airymax_agents_rs,orchestration,agentrt} 由
+# 各腿构建期拷贝——此前均为 `|| true` 容忍拷贝，缺失即静默漏件。
+REQUIRED_SUBTREE="bin/agentrt-tui config/agentrt.yaml config/model.yaml config/secrets.env.example config/permission_rules.yaml lib/airymax_agents lib/airymax_agents_rs lib/orchestration lib/agentrt"
 for f in "${ARTIFACTS[@]}"; do
     listing="$(tar -tzf "$f" 2>/dev/null || true)"
+    # zip 制品：GNU tar 无法读 zip（listing 空），改用 python 标准库枚举
+    if [ -z "$listing" ] && [[ "$f" == *.zip ]]; then
+        listing="$(python3 - "$f" <<'PYEOF'
+import sys, zipfile
+try:
+    with zipfile.ZipFile(sys.argv[1]) as z:
+        print("\n".join(z.namelist()))
+except Exception:
+    pass
+PYEOF
+)"
+    fi
     miss=""
     for b in $REQUIRED_BIN; do
-        case "$listing" in *"bin/$b"*) ;; *) miss="$miss $b" ;; esac
+        case "$listing" in
+            *"bin/$b"*|*"bin/$b.exe"*) ;;
+            *) miss="$miss $b" ;;
+        esac
     done
     if [ -n "$miss" ]; then
         log_fail "包内缺少关键组件（漏件）: $(basename "$f"):$miss"; PREFAIL=1
+    fi
+    # 完整能力断言：缺失即 fail（读完整发布包的组件目录层级）
+    miss2=""
+    for c in $REQUIRED_SUBTREE; do
+        # config 模板在 tar 内位于 config/ 顶目录；zip 内同名
+        case "$listing" in
+            *"$c"*) ;;
+            *) miss2="$miss2 $c" ;;
+        esac
+    done
+    if [ -n "$miss2" ]; then
+        log_fail "包内缺少能力组件（半成品）: $(basename "$f"):$miss2"; PREFAIL=1
     fi
     tmpext="$(mktemp -d)"
     if echo "$listing" | grep -q 'bin/agentrt-bootstrap.sh'; then
@@ -127,7 +164,7 @@ for f in "${ARTIFACTS[@]}"; do
     rm -rf "$tmpext"
 done
 [ "$PREFAIL" = "0" ] || { log_fail "发布预检未通过（${PREFAIL} 项），中止"; exit 1; }
-log_ok "发布预检通过: ${#ARTIFACTS[@]} 个制品（sha256 一致 + 大小正常 + 启动器语法 OK）"
+log_ok "发布预检通过: ${#ARTIFACTS[@]} 个制品（sha256 一致 + 大小正常 + 关键二进制齐 + 能力组件齐 + 启动器语法 OK）"
 
 # ─── 阶段 1：cosign 签名每个制品 ──────────────────────────────────────────
 if [ "$SKIP_SIGN" = "1" ] || [ "$SKIP_COSIGN" = "1" ]; then
