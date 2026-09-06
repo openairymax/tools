@@ -198,6 +198,28 @@ else
     echo "[builddeps] libcurl 已就位（跳过）"
 fi
 
+# ── curl 命令行工具防遮蔽（无条件执行，幂等）──────────────────────────
+# 0.1.12 工具链镜像 arm64/arm32 实证（release #47/#48，本地镜像复现）：
+#   本脚本自编译 libcurl 8.5.0 时 `make install` 连带把命令行工具装进
+#   /usr/local/bin/curl（PATH 先于 apt 的 /usr/bin/curl 7.68 生效）。该
+#   二进制引用 curl_easy_header（curl ≥7.83 新增符号），而 ld.so.cache
+#   对同 soname 双条目（/usr/local/lib/libcurl.so.4 与系统 libcurl.so.4）
+#   的取舍取决于 ld.so.conf.d 的 include 字母序：aarch64-linux-gnu.conf
+#   （arm64）、arm-linux-gnueabihf.conf（armv7）按字母排在 libc.conf
+#   （/usr/local/lib）之前 → 旧系统 libcurl（7.68，无 curl_easy_header）
+#   先入 cache 胜出 → "curl: symbol lookup error"（exit 127）；amd64 因
+#   x86_64-linux-gnu.conf 字母序在后而侥幸存活——同一雷区按架构表现
+#   不同，非 flaky。
+#   后果（单一根因三处受害，release #46/#47/#48 实证）：arm-32 腿
+#   TUI 交叉构建硬失败（set -euo pipefail）；arm-64/riscv-64 腿 rustup
+#   安装失败降级 → 发布包静默缺失 agentrt-tui。
+#   修复：无条件摘除 /usr/local/bin/curl(-config)（覆盖"已就位跳过"
+#   与旧镜像残留两种场景），curl 命令回退 apt 7.68 + 系统 libcurl
+#   （完全自洽）；库文件不受影响（产物经 pkg-config/-L 显式链接
+#   /usr/local/lib/libcurl.so.4，与命令行工具的 cache 解析序无关）。
+rm -f /usr/local/bin/curl /usr/local/bin/curl-config
+hash -r 2>/dev/null || true
+
 # ── libwebsockets 4.3.3 自编译（gateway_d websocket 组件，libssl.so.3）───
 if [ ! -f /usr/local/lib/libwebsockets.so ]; then
     echo "[builddeps] 自编译 libwebsockets 4.3.3 …"
@@ -233,3 +255,13 @@ fi
 # 统一 pkg-config 解析到自编译库（后续 configure/cmake 依赖此环境）
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 echo "[builddeps] 完成：OpenSSL 3.0.17 + libcurl 8.5.0 + libwebsockets 4.3.3"
+
+# ── 出口门：curl 命令行工具必须可用（fail-fast）───────────────────────
+# 在镜像构建期即拦截 curl 断链，避免坏镜像发布到 GHCR 后才在 release
+# 各腿炸出（arm-32 硬失败 / arm-64+riscv TUI 静默缺失，release
+# #46/#47/#48 实证）。lws 段的下载 curl 在此之前必须已可用。
+if ! curl --version >/dev/null 2>&1; then
+    echo "::error::[builddeps] 出口门失败：curl 命令行工具不可用（command -v curl=$(command -v curl 2>/dev/null || echo none)）" >&2
+    exit 1
+fi
+echo "[builddeps] 出口门通过：$(curl --version | head -1)"
