@@ -57,7 +57,7 @@ put_one() { # $1 file  -> rc; 打印耗时
     local f="$1" b upjson upurl rc t0 t1
     b="$(basename "$f")"
     upjson="$(curl -fsSG -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
-        --data-urlencode "file_name=${b}" "${API}/releases/tags/${TAG}/upload_url" 2>/dev/null)" \
+        --data-urlencode "file_name=${b}" "${API}/releases/${TAG}/upload_url" 2>/dev/null)" \
         || return 1
     upurl="$(python3 -c 'import json,sys;print((json.load(sys.stdin) or {}).get("url",""))' <<<"$upjson" 2>/dev/null)" || return 1
     [ -n "$upurl" ] || return 1
