@@ -8,8 +8,10 @@
 # 对 UPLOAD_PAR ∈ {3,6,8} 各上传相同字节量，实测各并发档聚合吞吐，为
 # publish-release.sh 默认并发取值提供数据定界。
 #
-# 安全性：专用探针 tag（v0.1.13-uploadprobe-<ts>）+ 专用 release；结束清理
-# 该 release 与其附件并删除 tag（best-effort，KEEP=1 保留现场供复核）。
+# 安全性：专用探针 tag（v0.1.13-uploadprobe-<ts>）+ 专用 release；结束删除该
+# tag（防 sync-mirror 镜像到 GitHub 触发 echo Release run）。atomgit/Gitee API
+# 不支持删除 release 对象（DELETE releases/{id} 405 实证），tag 删除后其行在
+# Releases 页呈 inert（无附件下载入口），可后续 UI 清理；KEEP=1 保留现场复核。
 #
 # 用法（GitHub runner 或具备公网+ATOMGIT_TOKEN 的机器）：
 #   ATOMGIT_TOKEN=... ATOMGIT_REPO=openairymax/agentrt \
