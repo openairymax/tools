@@ -43,9 +43,11 @@ for f in "$BIN_DIR"/*; do
     LAUNCHED=$((LAUNCHED + 1))
     out="$TMPD/$n.out"; err="$TMPD/$n.err"
     : > "$out"; : > "$err"
+    echo "  -- probe: $n"
     # 后台启动（/dev/null 输入防 TTY 阻塞）；bash 3.2 无 setsid，起后轮询存活
     "$f" </dev/null >"$out" 2>"$err" &
     pid=$!
+    rc=0
     alive=1
     for _ in 1 2; do
         sleep 1
@@ -53,13 +55,12 @@ for f in "$BIN_DIR"/*; do
     done
     if [ "$alive" = "1" ]; then
         kill "$pid" 2>/dev/null || true
-        # wait 返回非零会被 set -e 终止，必须用 || true 捕获
-        wait "$pid" 2>/dev/null || true
+        # wait 置于 if 条件避免 set -e 对非零返回的中止（bash 3.2）
+        if wait "$pid" 2>/dev/null; then :; else rc=$?; fi
         echo "  [可启] $n : 常驻运行 ≥2s（已终止探针进程）"
         continue
     fi
-    wait "$pid" 2>/dev/null || true
-    rc=$?
+    if wait "$pid" 2>/dev/null; then :; else rc=$?; fi
     if dyld_error "$err"; then
         echo "::error::FAIL $n : dyld 加载失败（非系统依赖未解析）"
         sed 's/^/    /' "$err" | head -5
