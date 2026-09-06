@@ -61,8 +61,14 @@ put_one() { # $1 file  -> rc; 打印耗时
         || return 1
     upurl="$(python3 -c 'import json,sys;print((json.load(sys.stdin) or {}).get("url",""))' <<<"$upjson" 2>/dev/null)" || return 1
     [ -n "$upurl" ] || return 1
+    # 预签名 PUT 必须携带 upload_url 返回的 headers（OBS 签名校验，缺则立即 403/400）
+    local -a uphdr=()
+    mapfile -t uphdr < <(python3 -c 'import json,sys
+for k, v in ((json.load(sys.stdin) or {}).get("headers") or {}).items():
+    print("-H"); print(f"{k}: {v}")' <<<"$upjson")
     t0="$(date +%s.%N)"
-    if curl -fsS --connect-timeout 20 --max-time 1200 -X PUT --upload-file "$f" "$upurl" >/dev/null 2>&1; then
+    if curl -fsS --connect-timeout 20 --max-time 1200 -X PUT \
+        "${uphdr[@]}" --upload-file "$f" "$upurl" >/dev/null 2>&1; then
         t1="$(date +%s.%N)"
         python3 -c "print(f'${b} {float('$t1')-float('$t0'):.1f}s')"
         return 0
