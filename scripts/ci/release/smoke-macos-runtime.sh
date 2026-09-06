@@ -10,10 +10,15 @@
 # 判定语义（loader 自包含目标，非"无配置可跑全功能"）：
 #   - stderr 出现 dyld 加载失败特征（Library not loaded / Symbol not found）
 #     → FAIL：自包含破坏，阻断打包；
-#   - 进程存活 ≥2s（进入 main 常驻）→ [可启]；
-#   - 快速退出（无配置/无 TTY 等正常快速失败，含 signal 终止）→ [可启]，
-#     记录退出码；stderr 前几行一并输出供审计。SIGABRT 等信号退出只证明
-#     main 已进入（dyld 已完成解析），不属于自包含失败。
+#   - 进程存活 ≥2s（进入 main 常驻）→ [可启-常驻]；
+#   - 快速退出（无配置/无 TTY 等正常快速失败，含信号终止）→ [可启-快退]，
+#     stderr 前几行附出供审计。dyld 在 exec 装载期完成解析，能否进入 main
+#     /常驻已不属于自包含失败。
+#
+# bash3.2 注意：后台作业 wait 的返回码与 $? 在 set -e/-u 组合下行为怪异
+# （g4smoke 34040562014/g4smoke2 34041918304 实证），本脚本不读取任何
+# wait/$?，只以 kill -0 存活探针 + stderr 内容做判定，wait 仅用于收割
+# 僵尸（|| true 兜底，不触发 errexit）。
 #
 # 用法：smoke-macos-runtime.sh <stage_dir>
 set -euo pipefail
@@ -41,35 +46,32 @@ for f in "$BIN_DIR"/*; do
     is_macho "$f" || continue
     n="$(basename "$f")"
     LAUNCHED=$((LAUNCHED + 1))
-    out="$TMPD/$n.out"; err="$TMPD/$n.err"
-    : > "$out"; : > "$err"
+    err="$TMPD/$n.err"
+    : > "$err"
     echo "  -- probe: $n"
-    # 后台启动（/dev/null 输入防 TTY 阻塞）；bash 3.2 无 setsid，起后轮询存活
-    "$f" </dev/null >"$out" 2>"$err" &
+    # 后台启动（/dev/null 输入防 TTY 阻塞）
+    "$f" </dev/null >/dev/null 2>"$err" &
     pid=$!
-    rc=0
-    alive=1
+    resident=0
     for _ in 1 2; do
         sleep 1
-        if ! kill -0 "$pid" 2>/dev/null; then alive=0; break; fi
+        if kill -0 "$pid" 2>/dev/null; then resident=1; fi
     done
-    if [ "$alive" = "1" ]; then
+    if [ "$resident" = "1" ]; then
         kill "$pid" 2>/dev/null || true
-        # wait 置于 if 条件避免 set -e 对非零返回的中止（bash 3.2）
-        if wait "$pid" 2>/dev/null; then :; else rc=$?; fi
-        echo "  [可启] $n : 常驻运行 ≥2s（已终止探针进程）"
-        continue
     fi
-    if wait "$pid" 2>/dev/null; then :; else rc=$?; fi
+    # 仅收割，不读取退出码（bash3.2 语义坑见头注）
+    wait "$pid" 2>/dev/null || true
     if dyld_error "$err"; then
         echo "::error::FAIL $n : dyld 加载失败（非系统依赖未解析）"
         sed 's/^/    /' "$err" | head -5
         FAILED=1
     else
-        echo "  [可启] $n : 加载器解析完整，退出码=$rc（无配置/无 TTY 快速退出属预期）"
-        if [ "$rc" -ge 128 ]; then
-            echo "  note: $n 以信号终止（rc=$rc），非自包含失败；stderr 摘要："
-            sed 's/^/    /' "$err" | head -4
+        if [ "$resident" = "1" ]; then
+            echo "  [可启-常驻] $n : 进入 main 常驻 ≥2s（探针已终止）"
+        else
+            echo "  [可启-快退] $n : 进入 main 后快速退出（无配置/无 TTY 属预期）；stderr 摘要："
+            sed 's/^/    /' "$err" | head -3
         fi
     fi
 done
